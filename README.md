@@ -4,7 +4,7 @@ EXIF 기반 파일 분류(동영상 파일도 가능한지 확인요망)
 
 Base
     하기 EXIF 기준으로 파일을 분류하며 순서는 다음과 같다.
-        BASE EXIF
+    BASE EXIF
         1. DateTimeOriginal
         2. DateTimeDigitized
         3. DateTime
