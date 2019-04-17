@@ -1,0 +1,239 @@
+#!/usr/bin/python
+# -*- coding: utf-8 -*-
+import shutil
+import os
+import re
+
+from PIL import Image, ExifTags
+
+"""EXIF 기반 파일 분류(동영상 파일도 가능한지 확인요망)
+
+Base
+    하기 EXIF 기준으로 파일을 분류하며 순서는 다음과 같다.
+        BASE EXIF
+        1. DateTimeOriginal
+        2. DateTimeDigitized
+        3. DateTime
+
+    확장자 필터
+        - jpg/jpeg/png/gif 등
+        - mp4/mov/mkv/avi 등
+
+    -- 이건 나중에 하자
+    분류할 파일이 특정 디렉토리 하위에 모두 있는 경우 다음과 같이 분류한다.
+        1. EXIF 기반으로 연도별 폴더 생성
+        2. 연도 폴더 내부 연도_월(YYYY_MM) 형태의 월별 폴더 생성(12개)
+        3. 파일의 현재 디렉토리와 이동할 최종 디렉토리를 가져온다.
+            (1) EXIF 기반으로 최종 디렉토리 구함
+            (2) (1)이 없는 경우 파일명 기반으로 최동 디렉토리 구함
+        4. 월폴더에 파일이 없는 경우 해당 폴더 삭제
+
+    분류할 파일이 이미 연도별 폴더로 나뉘어져 있는 경우 다음과 같이 분류한다.
+        1. 연도 폴더 내부 연도_월(YYYY_MM) 형태의 월별 폴더 생성(12개)
+        2. 파일의 현재 디렉토리와 이동할 최종 디렉토리를 가져온다.
+            (1) EXIF 기반으로 최종 디렉토리 구함
+            (2) (1)이 없는 경우 파일명 기반으로 최동 디렉토리 구함
+        3. 월폴더에 파일이 없는 경우 해당 폴더 삭제
+"""
+
+
+
+def make_ym_dirs(path_dir):
+    """해당 경로 하위에 연도_월 폴더를 생성한다.
+
+    특정 연도폴더의 디렉토리 정보를 매개변수로 받아 해당 연도폴더 내부에 연도_월 폴더가 존재하지 않으면 생성한다.
+
+    :param
+        path_dir: 특정 연도폴더의 경로
+
+    :return:
+        리턴 없음
+    """
+
+    for i in range(12):  # YYYY_MM 형태로 폴더를 만든다
+        yyyy_mm = year + '_' + months[i]  # 월폴더 명
+        if not (os.path.isdir(os.path.join(path_dir, yyyy_mm))):  # 월폴더가 없는 경우
+            os.makedirs(os.path.join(path_dir, yyyy_mm))  # 월폴더 생성
+
+
+
+def get_exif(path_item):
+    """해당 이미지의 EXIF 정보를 가져온다
+
+    파일의 EXIF를 얻고, 각 EXIF TAG와 TAG값을 딕셔너리에 담는다.
+
+    :param
+        path_item: 파일 경로(파일명 포함)
+
+    :return:
+        exif_raw_data: EXIF RAW 정보
+        exif_data: EXIF TAG별 값을 갖는 딕셔너리
+    """
+
+    exif_data = {}
+    img = Image.open(path_item)
+
+    try:
+        exif_raw_data = img._getexif()
+
+        if exif_raw_data is not None:
+            for tag, value in exif_raw_data.items():
+                decodedTag = ExifTags.TAGS.get(tag, tag)
+                exif_data[decodedTag] = value
+
+    except Exception as ex:
+        print('get_exif() Exception : ', ex)
+        return None, None
+
+    else:
+        return exif_raw_data, exif_data
+
+
+
+def get_dst_path(path_dir, file_name, exif_data):
+    """최종 디렉토리 경로를 가져온다.
+
+    EXIF 정보(EXIF 정보가 없으면 파일명)를 기초로 해당 파일이 이동되어야 할 최종 디렉토리 경로를 구한다.
+
+    :param
+        path_dir: 연도폴더 경로
+        file_name: 파일명(경로X)
+        exif_data: EXIF 정보(딕셔너리)
+
+    :return:
+        dst_path_item: 최종 디렉토리 경로(파일명 포함)
+    """
+
+    std_date = ''   # EXIF 정보 기반의 일자(없는 경우 파일명에 존재하는 일자)
+
+    for i in exif_data:
+        if i in exif_filter:
+            if i == 'DateTimeOriginal':
+                std_date = exif_data[i]
+                break
+            elif i == 'DateTimeDigitized':
+                std_date = exif_data[i]
+            elif i == 'DateTime' and std_date == '':
+                std_date = exif_data[i]
+            else:
+                pass
+
+    # EXIF 정보로 일자를 가져온다.
+    p = re.compile(r'(\d{4}):(\d{2}):(\d{2})')
+    m = p.match(std_date)
+
+    # EXIF 정보로 일자를 가져오지 못하면 파일명에서 일자를 찾는다.
+    if m is None:
+        p = re.compile(r'(\d{4})(\d{2})(\d{2})')
+        m = p.search(file_name)
+
+    # 파일명에서도 일자를 찾지 못하면 None 리턴
+    if m is None:
+        return None
+    else:
+        year_month = m.group(1) + '_' + m.group(2)
+        dst_path_item = os.path.join(path_dir, year_month, file_name)
+        # print('dst_path_item : ' + dst_path_item)
+
+        return dst_path_item
+
+
+
+def get_src_dst_path(path_dir):
+    """현재 디렉토리 경로와 최종 디렉토리 경로를 구해 딕셔너리 리턴
+
+    연도폴더 내부 파일별 현재 디렉토리 경로와 최종 디렉토리 경로를 구해 딕셔너리를 리턴한다.
+    연도폴더 내부 파일만 해당되며 내부 폴더는 스킵한다.
+    특정 확장자인 경우에만 처리된다.
+
+    :param
+        path_dir: 특정 연도폴더의 경로
+
+    :return:
+        src_dst_path: 현재 디렉토리 경로와 최종 디렉토리 경로를 담은 딕셔너리
+    """
+
+    src_dst_path = {}
+
+    f_ls = os.listdir(path_dir)  # 연도폴더 내부 파일 리스트를 가져온다
+    f_ls.sort()
+
+    for file_name in f_ls:
+        path_item = os.path.join(path_dir, file_name)
+        ext = os.path.splitext(path_item)[1]
+        # print('path_item : ' + path_item)
+
+        if not os.path.isdir(path_item) and ext in ext_filter:  # 디렉토리가 아니고(파일인 경우), 해당 확장자인 경우에만
+            exif_raw_data, exif_data = get_exif(path_item)
+            # print(exif_raw_data)
+            # print(exif_data)
+
+            if exif_data is not None:
+                dst_path_item = get_dst_path(path_dir, file_name, exif_data)  # EXIF 정보로 최종 파일경로 가져오기
+                src_dst_path[path_item] = dst_path_item  # 현재 디렉토리 경로와 최종 디렉토리 경로를 KEY:VALUE 형태로 딕셔너리에 담음
+
+    return src_dst_path
+
+
+# 월폴더가 빈폴더인 경우 해당 월폴더를 삭제
+def del_dir_do_not_contain_anything(path_dir):
+    """월폴더가 빈폴더인 경우 해당 월폴더를 삭제한다.
+
+    월폴더 내부 파일리스트를 확인해서 데이터가 없는 경우 해당 월폴더를 삭제한다.
+
+    :param
+        path_dir:
+
+    :return:
+        리턴 없음
+    """
+
+    f_ls = os.listdir(path_dir)  # 연도폴더 내부 파일 리스트를 가져온다
+    f_ls.sort()
+
+    for file_name in f_ls:
+        path_item = os.path.join(path_dir, file_name)
+
+        if os.path.isdir(path_item) and file_name[5:7] in months:
+            f_ls_ym = os.listdir(path_item)  # 월폴더 내부 파일 리스트를 가져온다
+
+            if not f_ls_ym:  # 빈 리스트이면 해당 경로를 삭제한다.
+                try:
+                    os.rmdir(path_item)
+                    print(file_name + ' 폴더 삭제 : 내부파일 없음')
+                except Exception as e:
+                    print(path_item, e)
+
+
+
+if __name__ == "__main__":
+
+    print('EXIF 기반 파일 분류 시작\n')
+
+    # 기초 데이터 설정
+    months = ['01', '02', '03', '04', '05', '06', '07', '08', '09', '10', '11', '12']  # 월폴더
+    ext_filter = ['.jpg', '.jpeg', '.png', '.gif', '.mp4', '.mov', '.mkv', '.avi']  # 확장자 필터
+    exif_filter = ['DateTimeOriginal', 'DateTimeDigitized', 'DateTime']
+
+    path_dir = 'C:/Users/user/Desktop/PythonTestData/2012'  # 디렉토리 설정(연도폴더)
+
+
+    if os.path.isdir(path_dir):
+        year = os.path.basename(path_dir)  # 경로의 마지막 폴더 이름 가져온다(연도)
+
+        if len(year) == 4:
+            make_ym_dirs(path_dir)   # 연도폴더 하위 월폴더 생성
+            print(year + '년도 하위 월폴더 생성 완료\n')
+
+
+    src_dst_path = get_src_dst_path(path_dir)   # 파일별로 현재 디렉토리 경로와 최종 디렉토리 경로 생성
+
+
+    for src_path in src_dst_path:   # 파라미터로 들어온 딕셔너리 기준 파일 이동
+        try:
+            shutil.move(src_path, src_dst_path[src_path])     # 파일 이동
+            print('COMPLETION >>>  [' + src_path + ']  ->  [' + src_dst_path[src_path] + ']')
+        except Exception as e:
+            print('ERROR >>>  [' + src_path + ']')
+
+    del_dir_do_not_contain_anything(path_dir)   # 연도폴더 하위 월폴더가 빈폴더인 경우 해당 월폴더를 삭제
